@@ -12,11 +12,11 @@ def _to_tensor(predicates):
     return np.stack(preds, axis=0)[indices], np.stack(p_values, axis=0)[indices]
 
 
-def _create_samples(num_samples, sample_func):
+def _create_samples(num_samples, sample_func, hide_output=True):
     from environment import init_env, disconnect_env
     from utils import HideOutput
 
-    with HideOutput():
+    with HideOutput(hide_output):
         init_env()
         raw_samples = [
             (frame, *_to_tensor(predicates))
@@ -27,14 +27,14 @@ def _create_samples(num_samples, sample_func):
     return raw_samples
 
 
-def create_dataset(path: str, num_batches: int, batch_size: int, sample_func, verbose=True):
+def create_dataset(path: str, num_batches: int, batch_size: int, sample_func, hide_output=True):
     print(f"Generating {num_batches} * {batch_size} = {num_batches * batch_size} samples")
 
     _order = int(np.log10(num_batches)) + 1
     os.makedirs(path)
 
     for i in tqdm(range(num_batches)):
-        batch = _create_samples(batch_size, sample_func)
+        batch = _create_samples(batch_size, sample_func, hide_output)
         frames, predicates, targets = zip(*batch)
         np.savez(
             path + f"/_{str(i).zfill(_order)}.npz",

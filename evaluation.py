@@ -6,9 +6,9 @@ from sampling import _VALID_COLORS, _VALID_SHAPES
 from utils import draw_frame, HideOutput
 
 
-def evaluate_sample(sample_func, model=None, probes=None, threshold=0.3):
+def evaluate_sample(sample_func, model=None, probes=None, threshold=0.3, hide_output=True):
 
-    with HideOutput():
+    with HideOutput(hide_output):
         init_env()
         test_frame, truth = sample_func()
         disconnect_env()

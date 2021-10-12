@@ -89,10 +89,9 @@ def get_near_relation(objects: Sequence[ObjectOnTable], max_distance=4.0):
     return [
         (
             AtomPredicate(AtomRelation.NEAR, o1.obj_type, o1.color, o2.obj_type, o2.color),
-            np.clip(2.0 * (1.0 - value / max_distance), 0, 1),
+            np.clip(2.0 * (1.0 - np.linalg.norm(o1.position - o2.position) / max_distance), 0, 1),
         )
         for o1, o2 in permutations(objects, 2)
-        if (value := np.linalg.norm(o1.position - o2.position))
     ]
 
 

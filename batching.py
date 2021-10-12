@@ -65,12 +65,12 @@ def _process(f):
     )
 
 
-def load_as_tf_dataset(*path):
-    return tf.data.Dataset.list_files(path + "/*.npz").flat_map(_process)
-
-
 def _list_files(path):
     return tf.data.Dataset.list_files(path + "/*.npz")
+
+
+def load_as_tf_dataset(path):
+    return _list_files(path).flat_map(_process)
 
 
 def load_datasets(paths):

@@ -127,7 +127,12 @@ def _create_shape(obj: AtomObject, color: AtomColor, position, orientation):
         )
     elif obj == AtomObject.PYRAMID:
         return create_bullet_shape(
-            "pyramid.obj", 1, position, orientation=orientation, mesh_scale=[2, 2, 2], color=color.to_rgba(),
+            "shapes/pyramid.obj",
+            1,
+            position,
+            orientation=orientation,
+            mesh_scale=[2, 2, 2],
+            color=color.to_rgba(),
         )
     else:
         raise ValueError("Unsupported shape!")

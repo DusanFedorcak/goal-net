@@ -3,9 +3,11 @@ import pkgutil
 import pybullet as pb
 import pybullet_data
 
+from predicates import AtomColor, AtomObject
 
-def init_env(load_egl=True):
-    client = pb.connect(pb.DIRECT)
+
+def init_env(load_egl=True, mode=pb.DIRECT):
+    client = pb.connect(mode)
     pb.setAdditionalSearchPath(pybullet_data.getDataPath())
 
     if load_egl:
@@ -20,8 +22,8 @@ def reset_env():
     pb.configureDebugVisualizer(pb.COV_ENABLE_GUI, 1)
     pb.setGravity(0, 0, -9.8)
 
-    plane = pb.loadURDF("plane.urdf", basePosition=[0, 0, -0.5], useFixedBase=True, globalScaling=2)
-    table = pb.loadURDF("table/table.urdf", basePosition=[0, 0, -6.3], useFixedBase=True, globalScaling=10)
+    pb.loadURDF("plane.urdf", basePosition=[0, 0, -0.5], useFixedBase=True, globalScaling=2)
+    pb.loadURDF("table/table.urdf", basePosition=[0, 0, -6.3], useFixedBase=True, globalScaling=10)
 
 
 def disconnect_env():
@@ -37,10 +39,17 @@ def get_camera_transforms(position, target):
     return viewMatrix, projectionMatrix
 
 
-def create_shape(
+def grab_frame(cam_pos, cam_target, light_dir, frame_size):
+    cam_view_m, cam_proj_m = get_camera_transforms(cam_pos, cam_target)
+    _, _, rgbImg, _, _ = pb.getCameraImage(*frame_size, cam_view_m, cam_proj_m, lightDirection=light_dir)
+
+    return rgbImg[..., :3]
+
+
+def _create_shape(
     shape_type, mass, position, half_extends=0, radius=0, mesh_scale=None, orientation=None, color=None
 ):
-    if not orientation:
+    if orientation is None:
         orientation = [0, 0, 0]
 
     if isinstance(shape_type, str):
@@ -64,8 +73,28 @@ def create_shape(
     )
 
 
-def grab_frame(cam_pos, cam_target, light_dir, frame_size):
-    cam_view_m, cam_proj_m = get_camera_transforms(cam_pos, cam_target)
-    _, _, rgbImg, _, _ = pb.getCameraImage(*frame_size, cam_view_m, cam_proj_m, lightDirection=light_dir)
-
-    return rgbImg[..., :3]
+def create_shape(obj: AtomObject, color: AtomColor, position, orientation, size=2.0):
+    if obj == AtomObject.CUBE:
+        return _create_shape(
+            pb.GEOM_BOX,
+            1,
+            position,
+            orientation=orientation,
+            half_extends=[size * 0.5, size * 0.5, size * 0.5],
+            color=color.to_rgba(),
+        )
+    elif obj == AtomObject.SPHERE:
+        return _create_shape(
+            pb.GEOM_SPHERE, 1, position, orientation=orientation, radius=size * 0.5, color=color.to_rgba()
+        )
+    elif obj == AtomObject.PYRAMID:
+        return _create_shape(
+            "shapes/pyramid.obj",
+            1,
+            position,
+            orientation=orientation,
+            mesh_scale=[size, size, size],
+            color=color.to_rgba(),
+        )
+    else:
+        raise ValueError("Unsupported shape!")

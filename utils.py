@@ -2,6 +2,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
+def vec3(*args):
+    assert len(args) == 3
+    return np.array(args)
+
+
 def _fit(arr: np.array):
     if len(arr) > 1:
         x = np.arange(len(arr))

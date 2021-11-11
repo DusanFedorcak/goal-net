@@ -1,50 +1,32 @@
-from typing import Sequence, Tuple, Union, List
+from typing import Dict, Sequence, Tuple, Union, List, Optional
 import dataclasses
 from dataclasses import dataclass
 from itertools import permutations
-
 import random
 
 import numpy as np
-import pybullet as pb
 
-from environment import reset_env, create_shape as create_bullet_shape
 from predicates import AtomColor, AtomObject, AtomPredicate, AtomRelation
-
-
-def _sigmoid(x):
-    return 1 / (1 + np.exp(-10 * x))
-
-
-def _act(x):
-    return np.clip(x, 0, 1)
-
-
-_POSITION_TESTS = {
-    AtomRelation.ON_LEFT_SIDE_OF: lambda x: _act(-x[0]),
-    AtomRelation.ON_RIGHT_SIDE_OF: lambda x: _act(x[0]),
-    AtomRelation.ON_FAR_SIDE_OF: lambda x: _act(x[1]),
-    AtomRelation.ON_NEAR_SIDE_OF: lambda x: _act(-x[1]),
-    AtomRelation.IN_CENTER_OF: lambda x: _act(1.0 - np.linalg.norm(x)),
-}
-
-_VALID_SHAPES = {AtomObject.CUBE, AtomObject.SPHERE, AtomObject.PYRAMID}
-_VALID_COLORS = set(AtomColor.__members__.values()) - {AtomColor.NO_COLOR, AtomColor.WHITE}
 
 
 @dataclass
 class ObjectOnTable:
     obj_type: AtomObject
     color: AtomColor
+    size: float
     position: np.array
     orientation: np.array
+    shape_id: Optional[int] = None
 
-    def sample(origin: np.array, max_bounds: Union[np.array, float], max_rotation: float) -> "ObjectOnTable":
+    def sample(
+        origin: np.array, max_bounds: Union[np.array, float], max_rotation: float, size: float
+    ) -> "ObjectOnTable":
         return ObjectOnTable(
             random.sample(_VALID_SHAPES, 1)[0],
             random.sample(_VALID_COLORS, 1)[0],
+            size,
             (np.random.random_sample(3) * 2 - 1) * max_bounds + origin,
-            [0, 0, np.random.ranf() * max_rotation],
+            np.array([0, 0, np.random.ranf() * max_rotation]),
         )
 
     def _has_intersection(o1: "ObjectOnTable", o2: "ObjectOnTable", min_distance: float) -> bool:
@@ -54,38 +36,73 @@ class ObjectOnTable:
         origin: np.array,
         max_bounds: Union[np.array, float],
         max_rotation: float,
+        size: float,
         existing_objects: Sequence["ObjectOnTable"],
         min_distance: float,
     ) -> "ObjectOnTable":
-        sample = ObjectOnTable.sample(origin, max_bounds, max_rotation)
+        sample = ObjectOnTable.sample(origin, max_bounds, max_rotation, size)
         while any(ObjectOnTable._has_intersection(sample, o, min_distance) for o in existing_objects):
-            sample = ObjectOnTable.sample(origin, max_bounds, max_rotation)
+            sample = ObjectOnTable.sample(origin, max_bounds, max_rotation, size)
 
         return sample
 
 
-def _test_position(
-    position: np.array, max_bounds: Union[np.array, float]
-) -> List[Tuple[AtomRelation, float]]:
+_VALID_SHAPES = {AtomObject.CUBE, AtomObject.SPHERE, AtomObject.PYRAMID}
+_VALID_COLORS = set(AtomColor.__members__.values()) - {AtomColor.NO_COLOR, AtomColor.WHITE}
+
+
+def get_on_table_relation(
+    obj: ObjectOnTable, max_bounds: Union[np.array, float], add_positional=True
+) -> List[Tuple[AtomPredicate, float]]:
+    # normalize obj position against bounds
     max_bounds = np.array(max_bounds)
-    fixed_bounds = max_bounds[max_bounds == 0] = 1.0
-    norm_p = position / fixed_bounds
-    return [(relation, float(test(norm_p))) for relation, test in _POSITION_TESTS.items()]
+    max_bounds[max_bounds == 0] = 1.0
+    norm_pos = obj.position / max_bounds
+    # test table positions
+    tests = {relation: float(test(obj, norm_pos)) for relation, test in _TABLE_POSITION_TESTS.items()}
 
+    is_on_table = tests[AtomRelation.ON]
+    preds = [
+        (
+            AtomPredicate(AtomRelation.ON, obj.obj_type, obj.color, AtomObject.TABLE, AtomColor.NO_COLOR),
+            is_on_table,
+        ),
+    ]
 
-def get_on_table_relation(o: ObjectOnTable, max_bounds: Union[np.array, float], add_positional=True):
-    preds = [(AtomPredicate(AtomRelation.ON, o.obj_type, o.color, AtomObject.TABLE, AtomColor.NO_COLOR), 1.0)]
-
-    if add_positional:
+    if add_positional and is_on_table:
         preds += [
-            (AtomPredicate(relation, o.obj_type, o.color, AtomObject.TABLE, AtomColor.NO_COLOR), value)
-            for relation, value in _test_position(o.position[:2], max_bounds[:2])
+            (AtomPredicate(relation, obj.obj_type, obj.color, AtomObject.TABLE, AtomColor.NO_COLOR), value)
+            for relation, value in tests.items()
+            if relation != AtomRelation.ON
         ]
 
     return preds
 
 
-def get_near_relation(objects: Sequence[ObjectOnTable], max_distance=4.0):
+_EPS = 0.05
+_TABLE_POSITION_TESTS = {
+    AtomRelation.ON: lambda obj, norm_pos: float(
+        all(np.abs(norm_pos[:2]) < 1.0) and obj.position[2] < obj.size * 0.5 + _EPS
+    ),
+    AtomRelation.ON_LEFT_SIDE_OF: lambda obj, norm_pos: _clip(-norm_pos[0]),
+    AtomRelation.ON_RIGHT_SIDE_OF: lambda obj, norm_pos: _clip(norm_pos[0]),
+    AtomRelation.ON_FAR_SIDE_OF: lambda obj, norm_pos: _clip(norm_pos[1]),
+    AtomRelation.ON_NEAR_SIDE_OF: lambda obj, norm_pos: _clip(-norm_pos[1]),
+    AtomRelation.IN_CENTER_OF: lambda obj, norm_pos: _clip(1.0 - 1.5 * np.linalg.norm(norm_pos[:2])),
+}
+
+
+def _sigm(x, weight=1.0):
+    return 1 / (1 + np.exp(-weight * x))
+
+
+def _clip(x):
+    return np.clip(x, 0, 1)
+
+
+def get_near_relation(
+    objects: Sequence[ObjectOnTable], max_distance=4.0
+) -> List[Tuple[AtomPredicate, float]]:
     return [
         (
             AtomPredicate(AtomRelation.NEAR, o1.obj_type, o1.color, o2.obj_type, o2.color),
@@ -95,7 +112,18 @@ def get_near_relation(objects: Sequence[ObjectOnTable], max_distance=4.0):
     ]
 
 
-def _obj_complement(predicate: AtomPredicate):
+def get_on_relation(objects: Sequence[ObjectOnTable]):
+    return [
+        (AtomPredicate(AtomRelation.ON, o1.obj_type, o1.color, o2.obj_type, o2.color), 1.0)
+        for o1, o2 in permutations(objects, 2)
+        if (
+            np.linalg.norm(o1.position[:2] - o2.position[:2]) - 0.5 * (o1.size + o2.size) < 0
+            and np.abs(o1.position[2] - (o2.position[2] + 0.5 * (o1.size + o2.size))) < o1.size * 0.5
+        )
+    ]
+
+
+def _obj_complement(predicate: AtomPredicate) -> List[ObjectOnTable]:
     return [
         dataclasses.replace(predicate, obj=o, obj_color=oc)
         for o in _VALID_SHAPES
@@ -104,38 +132,14 @@ def _obj_complement(predicate: AtomPredicate):
     ]
 
 
-def get_false_predicates(predicates, count):
+def get_false_predicates(
+    predicates: Sequence[AtomPredicate], count: int
+) -> List[Tuple[AtomPredicate, float]]:
     p_set = set(next(zip(*predicates)))
     false_predicates = [
         (false_p, 0.0) for p, _ in predicates for false_p in _obj_complement(p) if false_p not in p_set
     ]
     return random.sample(false_predicates, count) if count < len(false_predicates) else false_predicates
-
-
-def create_shape(o: ObjectOnTable):
-    return _create_shape(o.obj_type, o.color, o.position, o.orientation)
-
-
-def _create_shape(obj: AtomObject, color: AtomColor, position, orientation):
-    if obj == AtomObject.CUBE:
-        return create_bullet_shape(
-            pb.GEOM_BOX, 1, position, orientation=orientation, half_extends=[1, 1, 1], color=color.to_rgba(),
-        )
-    elif obj == AtomObject.SPHERE:
-        return create_bullet_shape(
-            pb.GEOM_SPHERE, 1, position, orientation=orientation, radius=1, color=color.to_rgba()
-        )
-    elif obj == AtomObject.PYRAMID:
-        return create_bullet_shape(
-            "shapes/pyramid.obj",
-            1,
-            position,
-            orientation=orientation,
-            mesh_scale=[2, 2, 2],
-            color=color.to_rgba(),
-        )
-    else:
-        raise ValueError("Unsupported shape!")
 
 
 def get_on_table_probes(add_positional=True):
@@ -162,35 +166,4 @@ def get_near_probes():
             for obj_2 in _VALID_SHAPES
             for obj_2_color in _VALID_COLORS
         ]
-    )
-
-
-def __sample_one(
-    origin: np.array, max_bounds: Union[np.array, float], max_rotation: float, num_false_predicates: int,
-):
-    # sample attributes
-    obj = random.sample(_VALID_SHAPES, 1)[0]
-    color = random.sample(_VALID_COLORS, 1)[0]
-    position = (np.random.random_sample(3) * 2 - 1) * max_bounds + origin
-    orientation = [0, 0, np.random.ranf() * max_rotation]
-
-    # construct predicates
-    on_predicates = [(AtomPredicate(AtomRelation.ON, obj, color, AtomObject.TABLE, AtomColor.NO_COLOR), 1.0)]
-
-    position_predicates = [
-        (AtomPredicate(relation, obj, color, AtomObject.TABLE, AtomColor.NO_COLOR), value)
-        for relation, value in _test_position(position[:2], max_bounds[:2])
-    ]
-
-    predicates = on_predicates + position_predicates
-    false_predicates = [(false_p, 0.0) for p, _ in predicates for false_p in _obj_complement(p)]
-
-    # add shape to scene
-    reset_env()
-    _create_shape(obj, color, position, orientation)
-
-    return predicates + (
-        random.sample(false_predicates, num_false_predicates)
-        if num_false_predicates < len(false_predicates)
-        else false_predicates
     )
